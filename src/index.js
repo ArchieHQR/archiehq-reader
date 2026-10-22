@@ -63,10 +63,21 @@ export class MailAgent extends WorkflowEntrypoint {
     const messages = [{ role: 'system', content: systemPrompt(env) }, ...history];
     const result = await agentLoop(env, messages, run, msg);
 
+    // Reply with /send and our own threading headers: the /reply endpoint quotes the whole
+    // original mail below the answer, which breaks "reply with one line" requests.
+    const refs = [...(msg.references ?? []), msg.message_id].filter((v, i, a) => v && a.indexOf(v) === i);
+    const subject = /^re:/i.test(msg.subject ?? '') ? msg.subject : `Re: ${msg.subject ?? ''}`;
+    const idemKey = `reply-${await instanceId(msg.message_id)}`;
     const sent = await run('reply', async () =>
-      am(env, `/inboxes/${enc(env.INBOX)}/messages/${enc(msg.message_id)}/reply`, {
+      am(env, `/inboxes/${enc(env.INBOX)}/messages/send`, {
         method: 'POST',
-        body: JSON.stringify({ text: result.reply, html: toHtml(result.reply) }),
+        headers: { 'idempotency-key': idemKey },
+        body: JSON.stringify({
+          to: [addressOf(msg.from)], subject, text: result.reply,
+          // /send keeps no In-Reply-To in AgentMail data; this label lets loadThread find the source thread.
+          labels: [`src-thread-${msg.thread_id}`],
+          headers: { 'In-Reply-To': msg.message_id, References: refs.join(' ') },
+        }),
       }));
     const out = { from: msg.from, subject: msg.subject, request: (msg.extracted_text ?? msg.text ?? '').slice(0, 2000),
       tools: result.tools, reply: result.reply, reply_message_id: sent.message_id, thread_id: sent.thread_id };
@@ -146,11 +157,39 @@ async function am(env, path, init = {}) {
   return text ? JSON.parse(text) : {};
 }
 
+// History = the mails named in the References chain plus AgentMail's own thread, by time.
+// Our replies go out via /send, so AgentMail may file them under another thread id.
 async function loadThread(env, msg) {
-  const t = await am(env, `/inboxes/${enc(env.INBOX)}/threads/${enc(msg.thread_id)}`);
+  const byId = new Map([[msg.message_id, msg]]);
+  const threads = new Set();
+  const queue = [msg];
+  // Walk back: each mail's AgentMail thread, In-Reply-To and References, up to 20 mails.
+  while (queue.length && byId.size < 20) {
+    const m = queue.shift();
+    if (m.thread_id && !threads.has(m.thread_id)) {
+      threads.add(m.thread_id);
+      try {
+        const t = await am(env, `/inboxes/${enc(env.INBOX)}/threads/${enc(m.thread_id)}`);
+        for (const x of t.messages ?? []) if (!byId.has(x.message_id)) { byId.set(x.message_id, x); queue.push(x); }
+      } catch {}
+    }
+    for (const l of m.labels ?? []) {
+      const tid = /^src-thread-(.+)$/.exec(l)?.[1];
+      if (tid && !threads.has(tid)) queue.push({ thread_id: tid, synthetic: true });
+    }
+    for (const id of [m.in_reply_to, ...(m.references ?? [])]) {
+      if (!id || byId.has(id) || byId.size >= 20) continue;
+      try {
+        const x = await am(env, `/inboxes/${enc(env.INBOX)}/messages/${enc(id)}`);
+        byId.set(id, x); queue.push(x);
+      } catch { byId.set(id, null); }
+    }
+  }
+  for (const [id, m] of byId) if (!m) byId.delete(id);
+  const all = [...byId.values()].filter(m => m === msg || String(m.timestamp) <= String(msg.timestamp)).sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
   const out = [];
   const trusted = env.TRUSTED_SENDERS.split(',').map(s => s.trim().toLowerCase());
-  for (const m of (t.messages ?? []).slice(-20)) {
+  for (const m of all.slice(-20)) {
     const mine = addressOf(m.from) === env.INBOX;
     if (!mine && !trusted.includes(addressOf(m.from))) {
       // Mail from anyone else in the thread is not a request: leave its content out.
@@ -362,10 +401,4 @@ async function readAttachment(env, messageId, attachmentId) {
   const blob = await (await fetch(a.download_url)).blob();
   if (/^text\//.test(a.content_type ?? '')) return head + await blob.text();
   return head + await toMarkdown(env, blob, a.content_type ?? '', a.filename ?? 'file');
-}
-
-function toHtml(text) {
-  const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const linked = esc.replace(/https?:\/\/[^\s<]+[^\s<.,;:!?)\]]/g, u => `<a href="${u}">${u}</a>`);
-  return `<div style="white-space:pre-wrap;font-family:sans-serif">${linked}</div>`;
 }
