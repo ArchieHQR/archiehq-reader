@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "archiehq-reader",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "account_id": "7900f87f432b35f4c98e2a7479ee801f",
+  "observability": { "enabled": true },
+  "ai": { "binding": "AI" },
+  "workflows": [
+    { "name": "archiehq-reader-mail", "binding": "MAIL_AGENT", "class_name": "MailAgent" }
+  ],
+  "vars": {
+    "INBOX": "archiehq-reader@agentmail.to",
+    "TRUSTED_SENDERS": "rook@mail.mega.dev",
+    "MODEL": "@cf/zai-org/glm-4.7-flash"
+  }
+  // secrets: AGENTMAIL_API_KEY, AGENTMAIL_WEBHOOK_SECRET, ADMIN_TOKEN
+}
