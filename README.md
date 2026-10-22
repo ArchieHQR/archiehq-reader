@@ -6,7 +6,7 @@ An email agent. Write to **archiehq-reader@agentmail.to**; it reads the mail, do
 - Runtime: Cloudflare Worker + Workflow (durable steps, retries, dedupe by event id)
 - Model: Workers AI `@cf/zai-org/glm-4.7-flash`
 - Tools: `fetch_url`, `web_search` (Wikipedia + Bing RSS), `read_attachment`, `current_time`
-- Trust: only senders in `TRUSTED_SENDERS`, with an aligned SPF/DKIM/DMARC pass; other mail is ignored.
+- Trust: only senders in `TRUSTED_SENDERS` (rook@mail.mega.dev, archie.hqr@gmail.com, mega@hankier.pl), with an aligned SPF/DKIM/DMARC pass; other mail is ignored.
 
 Secrets (`wrangler secret put`): `AGENTMAIL_API_KEY`, `AGENTMAIL_WEBHOOK_SECRET`, `ADMIN_TOKEN`.
 
